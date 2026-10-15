@@ -11,6 +11,8 @@ from tests.conftest import MockAsyncReader
 from zipwire import AsyncRemoteZip, EOCDInfo
 from zipwire._errors import FileNotFoundInZip, FileTooLarge, RangeRequestUnsupported
 from zipwire._zipinfo import RemoteZipInfo
+import unittest.mock as mock
+import aiofiles
 
 
 class TestAsyncRemoteZip:
@@ -176,6 +178,29 @@ class TestAsyncRemoteZip:
             dest = io.BytesIO()
             await rz.read_into("hello.txt", dest)
         assert dest.getvalue() == b"Hello, World!"
+
+    async def test_read_into_stored_async(self, stored_zip: bytes) -> None:
+        aiofiles.threadpool.wrap.register(mock.MagicMock)(
+            lambda *args, **kwargs: aiofiles.threadpool.binary.AsyncBufferedIOBase(
+                *args, **kwargs)
+        )
+
+        chunks: list[bytes] = []
+
+        def _write(*args, **kwargs):
+            chunks.extend(args)
+
+        mock_file_stream = mock.MagicMock(
+            write=_write
+        )
+
+        with mock.patch('aiofiles.threadpool.sync_open', return_value=mock_file_stream) as mock_open:
+            reader = MockAsyncReader(stored_zip)
+            async with (AsyncRemoteZip(reader) as rz,
+                        aiofiles.open("filename", "wb") as dest):
+                await rz.read_into_async("hello.txt", dest)
+
+            assert b"".join(chunks) == b"Hello, World!"
 
     async def test_read_into_stored_binary(self, stored_zip: bytes) -> None:
         reader = MockAsyncReader(stored_zip)

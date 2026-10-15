@@ -44,6 +44,7 @@ dev = [
     "pytest-httpserver>=1",
     "coverage[toml]>=7",
     "ruff>=0.11",
+    "aiofiles>=25.1.0",
 ]
 docs = [
     "zipwire[all]",
