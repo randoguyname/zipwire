@@ -9,8 +9,7 @@ from enum import Enum
 from zipwire._constants import CompressionMethod
 from zipwire._errors import CRCMismatch, FileTooLarge, UnsupportedCompression
 
-if typing.TYPE_CHECKING:
-    from zipwire._types import Writable, AsyncWritable
+from zipwire._types import Writable, AsyncWritable
 
 
 class _DecompressMode(Enum):
@@ -213,7 +212,7 @@ class AsyncStreamingDecompressor(StreamingDecompressorBase[AsyncWritable]):
             raise FileTooLarge(
                 self._filename, self._output_size, self._max_output_size)
         self._crc = zlib.crc32(chunk, self._crc)
-        await self._dest.async_write(chunk)
+        await self._dest.write(chunk)
 
     async def async_feed(self, data: bytes) -> None:
         """Decompress *data*, write output to dest, update CRC."""
