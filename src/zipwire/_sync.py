@@ -10,13 +10,13 @@ from zipwire._constants import (
     PREFETCH_EXTRA,
     PREFETCH_THRESHOLD,
 )
-from zipwire._decompress import StreamingDecompressor, decompress
+from zipwire._decompress import StreamingDecompressor, AsyncStreamingDecompressor, decompress
 from zipwire._errors import FileTooLarge, RangeRequestUnsupported
 from zipwire._parser import find_eocd, parse_local_file_header
 from zipwire._zipinfo import RemoteZipInfo
 
 if typing.TYPE_CHECKING:
-    from zipwire._types import SyncReader, Writable
+    from zipwire._types import SyncReader, Writable, AsyncWritable
 
 
 class SyncRemoteZip(RemoteZipBase):
@@ -208,3 +208,49 @@ class SyncRemoteZip(RemoteZipBase):
             for chunk in self._reader.stream_range(data_offset, info.compress_size):
                 sd.feed(chunk)
         sd.finish()
+
+    async def read_into_async(
+        self,
+        name: str | RemoteZipInfo,
+        dest: AsyncWritable,
+        *,
+        max_file_size: int | None = None,
+    ) -> None:
+        """Decompress a file from the archive into an asyncronous writable 
+        destination.
+
+        Unlike :meth:`read`, this truly streams: the compressed payload is
+        fetched in chunks via :meth:`stream_range` and each chunk is
+        decompressed and written immediately, keeping peak memory low.
+
+        The streaming decompressor also enforces *max_file_size* during
+        decompression, aborting if the actual output exceeds the limit
+        regardless of what the entry metadata claims.
+
+        Args:
+            name: Filename string or RemoteZipInfo object.
+            dest: A writable file-like object (e.g. ``io.BytesIO``, open file).
+            max_file_size: Optional limit on uncompressed size in bytes.
+                Raises :exc:`~zipwire.FileTooLarge` if the entry's
+                ``file_size`` exceeds this limit, or if the actual
+                decompressed output exceeds it.
+        """
+        resolved = self._resolve_entry(name)
+        if resolved is None:
+            return
+        info, data_offset, prefetched = resolved
+        if max_file_size is not None and info.file_size > max_file_size:
+            raise FileTooLarge(info.filename, info.file_size, max_file_size)
+        sd = AsyncStreamingDecompressor(
+            info.compress_type,
+            info.CRC,
+            dest,
+            filename=info.filename,
+            max_output_size=max_file_size,
+        )
+        if prefetched is not None:
+            await sd.async_feed(prefetched)
+        else:
+            for chunk in self._reader.stream_range(data_offset, info.compress_size):
+                await sd.async_feed(chunk)
+        await sd.async_finish()
