@@ -10,7 +10,7 @@ from zipwire._constants import CompressionMethod
 from zipwire._errors import CRCMismatch, FileTooLarge, UnsupportedCompression
 
 if typing.TYPE_CHECKING:
-    from zipwire._types import Writable
+    from zipwire._types import Writable, AsyncWritable
 
 
 class _DecompressMode(Enum):
@@ -79,7 +79,7 @@ def decompress(
     return result
 
 
-class StreamingDecompressor:
+class StreamingDecompressorBase[DestT_]:
     """Feed compressed chunks via :meth:`feed`, then call :meth:`finish` to verify CRC-32.
 
     When *max_output_size* is set, :meth:`feed` tracks the cumulative
@@ -91,7 +91,7 @@ class StreamingDecompressor:
         self,
         method: int,
         expected_crc: int,
-        dest: Writable,
+        dest: DestT_,
         *,
         filename: str = "",
         max_output_size: int | None = None,
@@ -137,13 +137,51 @@ class StreamingDecompressor:
             case _:
                 raise UnsupportedCompression(method)
 
+    # def _write(self, chunk: bytes) -> None:
+    #     """Write a decompressed chunk, enforcing the output size limit."""
+    #     if not chunk:
+    #         return
+    #     self._output_size += len(chunk)
+    #     if self._max_output_size is not None and self._output_size > self._max_output_size:
+    #         raise FileTooLarge(
+    #             self._filename, self._output_size, self._max_output_size)
+    #     self._crc = zlib.crc32(chunk, self._crc)
+    #     self._dest.write(chunk)
+
+    # def feed(self, data: bytes) -> None:
+    #     """Decompress *data*, write output to dest, update CRC."""
+    #     if self._mode is _DecompressMode.STORED:
+    #         self._write(data)
+    #     else:
+    #         # deflate, bz2, lzma, zstandard - all expose .decompress()
+    #         self._write(self._dobj.decompress(data))
+
+    # def finish(self) -> None:
+    #     """Flush remaining data (deflate only) and verify CRC-32."""
+    #     if self._mode is _DecompressMode.DEFLATED:
+    #         self._write(self._dobj.flush())
+
+    #     actual_crc = self._crc & 0xFFFFFFFF
+    #     if actual_crc != self._expected_crc:
+    #         raise CRCMismatch(self._expected_crc, actual_crc)
+
+
+class StreamingDecompressor(StreamingDecompressorBase[Writable]):
+    """Feed compressed chunks via :meth:`feed`, then call :meth:`finish` to verify CRC-32.
+
+    When *max_output_size* is set, :meth:`feed` tracks the cumulative
+    decompressed output and raises :exc:`~zipwire.DecompressionBomb`
+    if it exceeds the limit.
+    """
+
     def _write(self, chunk: bytes) -> None:
         """Write a decompressed chunk, enforcing the output size limit."""
         if not chunk:
             return
         self._output_size += len(chunk)
         if self._max_output_size is not None and self._output_size > self._max_output_size:
-            raise FileTooLarge(self._filename, self._output_size, self._max_output_size)
+            raise FileTooLarge(
+                self._filename, self._output_size, self._max_output_size)
         self._crc = zlib.crc32(chunk, self._crc)
         self._dest.write(chunk)
 
@@ -159,6 +197,36 @@ class StreamingDecompressor:
         """Flush remaining data (deflate only) and verify CRC-32."""
         if self._mode is _DecompressMode.DEFLATED:
             self._write(self._dobj.flush())
+
+        actual_crc = self._crc & 0xFFFFFFFF
+        if actual_crc != self._expected_crc:
+            raise CRCMismatch(self._expected_crc, actual_crc)
+
+
+class AsyncStreamingDecompressor(StreamingDecompressorBase[AsyncWritable]):
+    async def _write_async(self, chunk: bytes) -> None:
+        """Write a decompressed chunk, enforcing the output size limit."""
+        if not chunk:
+            return
+        self._output_size += len(chunk)
+        if self._max_output_size is not None and self._output_size > self._max_output_size:
+            raise FileTooLarge(
+                self._filename, self._output_size, self._max_output_size)
+        self._crc = zlib.crc32(chunk, self._crc)
+        await self._dest.async_write(chunk)
+
+    async def async_feed(self, data: bytes) -> None:
+        """Decompress *data*, write output to dest, update CRC."""
+        if self._mode is _DecompressMode.STORED:
+            await self._write_async(data)
+        else:
+            # deflate, bz2, lzma, zstandard - all expose .decompress()
+            await self._write_async(self._dobj.decompress(data))
+
+    async def async_finish(self) -> None:
+        """Flush remaining data (deflate only) and verify CRC-32."""
+        if self._mode is _DecompressMode.DEFLATED:
+            await self._write_async(self._dobj.flush())
 
         actual_crc = self._crc & 0xFFFFFFFF
         if actual_crc != self._expected_crc:

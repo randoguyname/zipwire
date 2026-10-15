@@ -113,3 +113,10 @@ class Writable(typing.Protocol):
     """Protocol for writable file-like objects (io.BytesIO, io.BufferedWriter, etc.)."""
 
     def write(self, data: bytes, /) -> object: ...
+
+
+@typing.runtime_checkable
+class AsyncWritable(typing.Protocol):
+    """Protocol for asyncronous writable file-like objects (aiofiles.AsyncBufferedIOBase, etc.)."""
+
+    async def async_write(self, data: bytes, /) -> object: ...

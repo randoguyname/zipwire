@@ -10,13 +10,13 @@ from zipwire._constants import (
     PREFETCH_EXTRA,
     PREFETCH_THRESHOLD,
 )
-from zipwire._decompress import StreamingDecompressor, decompress
+from zipwire._decompress import StreamingDecompressor, AsyncStreamingDecompressor, decompress
 from zipwire._errors import FileTooLarge, RangeRequestUnsupported
 from zipwire._parser import find_eocd, parse_local_file_header
 from zipwire._zipinfo import RemoteZipInfo
 
 if typing.TYPE_CHECKING:
-    from zipwire._types import AsyncReader, Writable
+    from zipwire._types import AsyncReader, Writable, AsyncWritable
 
 
 class AsyncRemoteZip(RemoteZipBase):
@@ -167,7 +167,7 @@ class AsyncRemoteZip(RemoteZipBase):
     async def read_into(
         self,
         name: str | RemoteZipInfo,
-        dest: Writable,
+        dest: Writable | AsyncWritable,
         *,
         max_file_size: int | None = None,
     ) -> None:
@@ -195,10 +195,30 @@ class AsyncRemoteZip(RemoteZipBase):
         info, data_offset, prefetched = resolved
         if max_file_size is not None and info.file_size > max_file_size:
             raise FileTooLarge(info.filename, info.file_size, max_file_size)
+
+        is_async_output = hasattr(dest, "async_write")
+
+        if is_async_output:
+            sd = AsyncStreamingDecompressor(
+                info.compress_type,
+                info.CRC,
+                dest,  # type: ignore
+                filename=info.filename,
+                max_output_size=max_file_size,
+            )
+            if prefetched is not None:
+                await sd.async_feed(prefetched)
+            else:
+                async for chunk in self._reader.stream_range(data_offset, info.compress_size):
+                    await sd.async_feed(chunk)
+            await sd.async_finish()
+
+            return
+
         sd = StreamingDecompressor(
             info.compress_type,
             info.CRC,
-            dest,
+            dest,  # type: ignore
             filename=info.filename,
             max_output_size=max_file_size,
         )
